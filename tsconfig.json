@@ -1,0 +1,35 @@
+{
+  // Visit https://aka.ms/tsconfig to read more about this file
+  "compilerOptions": {
+    // === File Structure ===
+    "rootDir": "./",              // แหล่งโค้ดต้นทาง
+    "outDir": "./dist",           // โฟลเดอร์เก็บไฟล์แปลงแล้ว
+
+    // === Environment Settings ===
+    "target": "ES2020",           // รองรับฟีเจอร์ใหม่ของ JS
+    "module": "CommonJS",         // ใช้กับ Node.js ได้ดี
+    "lib": ["ESNext"],            // รองรับ API ล่าสุดของ JS
+    "types": ["node", "express"], // ✅ เพิ่ม type definitions ของ Node และ Express
+
+    // === Output Options ===
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+
+    // === Type Checking ===
+    "strict": true,
+    "skipLibCheck": true, // ข้ามตรวจสอบ types ของ library ภายนอก
+
+    // === Module/Import Settings ===
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true, // ให้ import ไฟล์ .json ได้
+    "isolatedModules": true,
+
+    // === Optional strictness for debugging ===
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true
+  },
+  "include": ["./**/*.ts"], // รวมทุกไฟล์ .ts
+  "exclude": ["node_modules", "dist"] // ไม่รวมโฟลเดอร์เหล่านี้
+}
