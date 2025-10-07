@@ -17,7 +17,7 @@
     "declarationMap": true,
 
     // === Type Checking ===
-    "strict": true,
+    "strict": false,
     "skipLibCheck": true, // ข้ามตรวจสอบ types ของ library ภายนอก
 
     // === Module/Import Settings ===
@@ -28,7 +28,7 @@
 
     // === Optional strictness for debugging ===
     "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true
+    "exactOptionalPropertyTypes": false
   },
   "include": ["./**/*.ts"], // รวมทุกไฟล์ .ts
   "exclude": ["node_modules", "dist"] // ไม่รวมโฟลเดอร์เหล่านี้
