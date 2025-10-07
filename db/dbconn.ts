@@ -1,28 +1,29 @@
-// db.ts
-import mysql from "mysql2/promise";
-import dotenv from "dotenv";
+import express from "express";
+import * as os from "os";
 
-dotenv.config(); // โหลดค่าจากไฟล์ .env
+const db = express();
+db.use(express.json());
 
-export const db = mysql.createPool({
-  host: process.env.DB_HOST || "202.28.34.203",
-  user: process.env.DB_USER || "mb68_66011212222",
-  password: process.env.DB_PASS || "@Hq27hP@LnQo",
-  database: process.env.DB_NAME || "mb68_66011212222",
-  port: Number(process.env.DB_PORT) || 3306,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
+// ✅ ไม่ต้องเปิดพอร์ตเองใน Vercel
+// ❌ ห้ามใช้ app.listen()
+
+// ✅ ตัวอย่าง route หลัก
+db.get("/", (req, res) => {
+  // หาค่า IP ของเครื่อง (แค่เพื่อ debug เฉย ๆ)
+  let address = "0.0.0.0";
+  const interfaces = os.networkInterfaces();
+  Object.keys(interfaces).forEach((interfaceName) => {
+    interfaces[interfaceName]?.forEach((interfaceInfo) => {
+      if (interfaceInfo.family === "IPv4" && !interfaceInfo.internal) {
+        address = interfaceInfo.address;
+      }
+    });
+  });
+
+  res.json({
+    message: "Database API is running on Vercel 🚀",
+    host: address,
+  });
 });
-
-(async () => {
-  try {
-    const connection = await db.getConnection();
-    console.log("✅ Connected to MySQL successfully!");
-    connection.release();
-  } catch (err) {
-    console.error("❌ Database connection failed:", err);
-  }
-})();
 
 export default db;
