@@ -1,28 +1,27 @@
 import { Router, Request, Response } from "express";
-import { RowDataPacket } from 'mysql2';
+import { RowDataPacket } from "mysql2";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { db } from "../db/dbconn";
-import express from "express";
 import path from "path";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import * as fs from "fs";
 
-export const router = express.Router();
+export const router = Router();
 
-// Upload config
+// Create uploads folder if not exist
 const uploadsDir = path.resolve(__dirname, "../uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
+// Multer config
 const storage = multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, uploadsDir),
     filename: (_req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname)),
 });
-
 const upload = multer({ storage, limits: { fileSize: 64 * 1024 * 1024 } });
 
-// 🔹 REGISTER – สมัครสมาชิกพร้อมรูปภาพ
+// 🔹 REGISTER
 router.post("/SignUp", upload.single("profile_image"), async (req: Request, res: Response) => {
     const { username, email, password, role } = req.body;
     const file = req.file;
@@ -30,8 +29,11 @@ router.post("/SignUp", upload.single("profile_image"), async (req: Request, res:
     if (!username || !email || !password) return res.status(400).json({ error: "กรอกข้อมูลไม่ครบ" });
 
     try {
-        const [exists] = await db.query("SELECT * FROM user_account WHERE username = ? OR email = ?", [username, email]);
-        if ((exists as any[]).length > 0) return res.status(400).json({ error: "username หรือ email ถูกใช้แล้ว" });
+        const [exists] = await db.query<RowDataPacket[]>(
+            "SELECT * FROM user_account WHERE username = ? OR email = ?",
+            [username, email]
+        );
+        if (exists.length > 0) return res.status(400).json({ error: "username หรือ email ถูกใช้แล้ว" });
 
         const hash = await bcrypt.hash(password, 10);
         const imageUrl = file ? `/uploads/${file.filename}` : null;
@@ -58,14 +60,14 @@ router.post("/SignUp", upload.single("profile_image"), async (req: Request, res:
     }
 });
 
-// 🔹 LOGIN – เข้าสู่ระบบ
+// 🔹 LOGIN
 router.post("/Login", async (req: Request, res: Response) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: "กรุณากรอกอีเมลและรหัสผ่าน" });
 
     try {
-        const [rows] = await db.query("SELECT * FROM user_account WHERE email = ?", [email]);
-        const user = (rows as any[])[0];
+        const [rows] = await db.query<RowDataPacket[]>("SELECT * FROM user_account WHERE email = ?", [email]);
+        const user = rows[0] as any;
         if (!user) return res.status(401).json({ error: "ไม่พบผู้ใช้งานนี้" });
 
         const match = await bcrypt.compare(password, user.password_hash);
@@ -90,10 +92,13 @@ router.post("/Login", async (req: Request, res: Response) => {
         res.status(500).json({ error: "เกิดข้อผิดพลาดในระบบ" });
     }
 });
-// 🔹 GET USERS - ดึงข้อมูลผู้ใช้ทั้งหมด
+
+// 🔹 GET USERS
 router.get("/users", async (_req, res) => {
     try {
-        const [rows] = await db.query("SELECT id, username, email, role, wallet_balance, created_at FROM user_account");
+        const [rows] = await db.query<RowDataPacket[]>(
+            "SELECT id, username, email, role, wallet_balance, created_at FROM user_account"
+        );
         res.json(rows);
     } catch (err) {
         console.error(err);
@@ -101,7 +106,7 @@ router.get("/users", async (_req, res) => {
     }
 });
 
-
+// 🔹 UPDATE PROFILE
 router.post('/update-profile', upload.single('profileImg'), async (req: Request, res: Response) => {
     try {
         const { userId, name } = req.body;
@@ -111,7 +116,7 @@ router.post('/update-profile', upload.single('profileImg'), async (req: Request,
             profile_image_url = `/uploads/${req.file.filename}`;
         }
 
-        // อัปเดตฐานข้อมูล
+        // Update DB
         let query = '';
         const params: any[] = [];
         if (profile_image_url) {
@@ -124,7 +129,7 @@ router.post('/update-profile', upload.single('profileImg'), async (req: Request,
 
         await db.query(query, params);
 
-        // ดึงข้อมูล user ใหม่
+        // Fetch updated user
         const [rows] = await db.query<RowDataPacket[]>('SELECT id, username, profile_image_url, wallet_balance FROM user_account WHERE id = ?', [userId]);
         const user = rows[0];
 
@@ -134,4 +139,3 @@ router.post('/update-profile', upload.single('profileImg'), async (req: Request,
         res.status(500).json({ success: false, message: 'Server error' });
     }
 });
-
