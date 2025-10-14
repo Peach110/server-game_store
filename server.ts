@@ -2,9 +2,9 @@ import app from "./app";
 import dotenv from "dotenv";
 import os from "os";
 
-// dotenv.config();
-// const PORT = process.env.PORT || 3000;
-const port = 3000
+dotenv.config();
+const PORT = process.env.PORT || 3000;
+// const port = 3000
 
 var ip = "0.0.0.0";
 var ips = os.networkInterfaces();
@@ -14,9 +14,9 @@ Object.keys(ips).forEach(function (_interface) {
     });
 });
 
-app.listen(port, () => {
-    console.log(`Game store API listening at http://${ip}:${port}`);
-});
-// app.listen(PORT, () => {
-//   console.log(`✅ Server running on port ${PORT}`);
+// app.listen(port, () => {
+//     console.log(`Game store API listening at http://${ip}:${port}`);
 // });
+app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+});
