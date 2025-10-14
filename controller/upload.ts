@@ -1,52 +1,25 @@
-import express from "express";
+import express from "express"; 
 import path from "path";
 import multer from "multer";
-import { v4 as uuidv4 } from "uuid";
-import * as fs from "fs";
+import fs from "fs";
 
 export const router = express.Router();
 
-const uploadsDir = path.resolve(__dirname, "../uploads");
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-}
+const uploadPath = path.join(__dirname, "../uploads");
+if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
 
 const storage = multer.diskStorage({
-    destination: (_req, _file, cb) => {
-        cb(null, uploadsDir);
-    },
-    filename: (_req, file, cb) => {
-        const ext = path.extname(file.originalname);
-        const uniqueName = uuidv4() + ext;
-        cb(null, uniqueName);
-    },
+  destination: (_req, _file, cb) => cb(null, uploadPath),
+  filename: (_req, file, cb) => {
+    const uniqueName = Date.now() + "-" + Math.round(Math.random() * 10000) + path.extname(file.originalname);
+    cb(null, uniqueName);
+  }
 });
 
-const upload = multer({
-    storage,
-    limits: { fileSize: 64 * 1024 * 1024 }, // 64 MB
-});
+const upload = multer({ storage, limits: { fileSize: 64 * 1024 * 1024 } });
 
-// Route to upload a file
 router.post("/", upload.single("file"), (req, res) => {
-    if (!req.file) {
-        res.status(400).json({ error: "No file uploaded" });
-        return;
-    }
-    res.json({ filename: req.file.filename });
-});
-
-router.get("/:filename", (req, res) => {
-    const filename = req.params.filename;
-    const filePath = path.join(uploadsDir, filename);
-    if (!fs.existsSync(filePath)) {
-        res.status(404).json({ error: "File not found" });
-        return;
-    }
-    const download = req.query.download === "true";
-    if (download) {
-        res.download(filePath);
-    } else {
-        res.sendFile(filePath);
-    }
+  const file = req.file;
+  if (!file) return res.status(400).json({ message: "ไม่มีไฟล์ส่งมา" });
+  res.json({ filename: file.filename }); // ส่งเฉพาะชื่อไฟล์
 });

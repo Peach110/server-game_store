@@ -2,103 +2,152 @@ import { Router, Request, Response } from "express";
 import { RowDataPacket } from "mysql2";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { db } from "../db/dbconn";
+
 import path from "path";
 import multer from "multer";
 import { v4 as uuidv4 } from "uuid";
 import * as fs from "fs";
+import express from "express";
+import { db } from "../db/dbconn"; // ✅ ปรับ path ตามโปรเจกต์คุณ
 
 export const router = Router();
 
-// Create uploads folder if not exist
-const uploadsDir = path.resolve(__dirname, "../uploads");
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+// ✅ เปิด CORS และ Middleware พื้นฐาน
+router.use(express.json());
+router.use(express.urlencoded({ extended: true }));
 
-// Multer config
+// ===================== STATIC FILE SERVING FIX =====================
+// FIX: ใช้ path.resolve('uploads') เพื่อให้ Express ชี้ไปที่โฟลเดอร์ uploads ที่ถูกสร้าง 
+// โดย Multer อย่างถูกต้อง ไม่ว่าจะรันเซิร์ฟเวอร์จากที่ใด
+router.use('/uploads', express.static(path.resolve('uploads')));
+// ===================================================================
+
+// ตั้ง folder เก็บไฟล์ (Multer configuration)
 const storage = multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadsDir),
-    filename: (_req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname)),
+    destination: function (_req, _file, cb) {
+        // Multer บันทึกไฟล์ในโฟลเดอร์ 'uploads/' ซึ่งสัมพันธ์กับ CWD (Current Working Directory)
+        cb(null, 'uploads/');
+    },
+    filename: function (_req, file, cb) {
+        const ext = path.extname(file.originalname);
+        cb(null, `${Date.now()}${ext}`);
+    }
 });
-const upload = multer({ storage, limits: { fileSize: 64 * 1024 * 1024 } });
 
-// 🔹 REGISTER
+export const upload = multer({ storage });
+
+// ================= SIGNUP =================
 router.post("/SignUp", upload.single("profile_image"), async (req: Request, res: Response) => {
-    const { username, email, password, role } = req.body;
-    const file = req.file;
+  const { username, email, password, role } = req.body;
+  const file = req.file;
 
-    if (!username || !email || !password) return res.status(400).json({ error: "กรอกข้อมูลไม่ครบ" });
+  if (!username || !email || !password) {
+    return res.status(400).json({ error: "กรอกข้อมูลไม่ครบ" });
+  }
 
-    try {
-        const [exists] = await db.query<RowDataPacket[]>(
-            "SELECT * FROM user_account WHERE username = ? OR email = ?",
-            [username, email]
-        );
-        if (exists.length > 0) return res.status(400).json({ error: "username หรือ email ถูกใช้แล้ว" });
+  try {
+    // ✅ เชื่อมฐานข้อมูลจริง (ใช้ pool หรือ db ที่คุณ import มา)
+    const [existing]: any = await db.query(
+      "SELECT id FROM user_account WHERE email = ? OR username = ?",
+      [email, username]
+    );
 
-        const hash = await bcrypt.hash(password, 10);
-        const imageUrl = file ? `/uploads/${file.filename}` : null;
-
-        const [result] = await db.query(
-            "INSERT INTO user_account (username, email, password_hash, role, profile_image_url, wallet_balance) VALUES (?, ?, ?, ?, ?, ?)",
-            [username, email, hash, role || "user", imageUrl, 0]
-        );
-
-        res.json({
-            message: "สมัครสมาชิกสำเร็จ",
-            user: {
-                id: (result as any).insertId,
-                username,
-                email,
-                role: role || "user",
-                wallet_balance: 0,
-                profile_image_url: imageUrl
-            }
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "เกิดข้อผิดพลาดในระบบ" });
+    if (existing.length > 0) {
+      return res.status(400).json({ error: "อีเมลหรือชื่อผู้ใช้ถูกใช้แล้ว" });
     }
+
+    // ✅ เข้ารหัสรหัสผ่าน
+    const hash = await bcrypt.hash(password, 10);
+    const imageUrl = file ? `/uploads/${file.filename}` : null;
+
+    // ✅ บันทึกลง DB
+    const [result]: any = await db.query(
+      `INSERT INTO user_account (username, email, password_hash, profile_image_url, role, wallet_balance)
+       VALUES (?, ?, ?, ?, ?, 0.00)`,
+      [username, email, hash, imageUrl, role || "user"]
+    );
+
+    // ✅ ตอบกลับ frontend
+    res.json({
+      message: "สมัครสมาชิกสำเร็จ",
+      user: {
+        id: result.insertId,
+        username,
+        email,
+        role: role || "user",
+        wallet_balance: 0,
+        profile_image_url: imageUrl,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "เกิดข้อผิดพลาดในระบบ" });
+  }
 });
 
-// 🔹 LOGIN
-router.post("/Login", async (req: Request, res: Response) => {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "กรุณากรอกอีเมลและรหัสผ่าน" });
 
-    try {
-        const [rows] = await db.query<RowDataPacket[]>("SELECT * FROM user_account WHERE email = ?", [email]);
-        const user = rows[0] as any;
-        if (!user) return res.status(401).json({ error: "ไม่พบผู้ใช้งานนี้" });
 
-        const match = await bcrypt.compare(password, user.password_hash);
-        if (!match) return res.status(401).json({ error: "รหัสผ่านไม่ถูกต้อง" });
+router.post("/Login", async (req, res) => {
+  const { email, password, role } = req.body;
 
-        const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, "SECRET_KEY", { expiresIn: "2h" });
+  if (!email || !password || !role) {
+    return res.status(400).json({ error: "กรุณากรอกอีเมล รหัสผ่าน และ role" });
+  }
 
-        res.json({
-            message: "เข้าสู่ระบบสำเร็จ",
-            token,
-            user: {
-                id: user.id,
-                username: user.username,
-                email: user.email,
-                role: user.role,
-                wallet_balance: user.wallet_balance,
-                profile_image_url: user.profile_image_url
-            }
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "เกิดข้อผิดพลาดในระบบ" });
+  try {
+    // ดึง user จริงจาก DB
+    const [rows]: any = await db.query(
+      "SELECT * FROM user_account WHERE email = ?",
+      [email]
+    );
+
+    if (!rows.length) {
+      return res.status(401).json({ error: "อีเมลหรือรหัสผ่านไม่ถูกต้อง" });
     }
+
+    const user = rows[0];
+
+    // เช็กรหัสผ่าน
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+      return res.status(401).json({ error: "อีเมลหรือรหัสผ่านไม่ถูกต้อง" });
+    }
+
+    // เช็ค role ว่าตรงกับที่ user เลือกหรือไม่
+    if (user.role !== role) {
+      return res.status(403).json({ error: "คุณไม่มีสิทธิ์เข้าใช้งานในส่วนนี้" });
+    }
+
+    // สร้าง JWT token
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role: user.role },
+      process.env.SECRET_KEY || "SECRET_KEY",
+      { expiresIn: "2h" }
+    );
+
+    res.json({
+      message: "เข้าสู่ระบบสำเร็จ",
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        wallet_balance: user.wallet_balance,
+        profile_image_url: user.profile_image_url,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "เกิดข้อผิดพลาดในระบบ" });
+  }
 });
 
-// 🔹 GET USERS
+
+// 🔹 GET USERS - ดึงข้อมูลผู้ใช้ทั้งหมด
 router.get("/users", async (_req, res) => {
     try {
-        const [rows] = await db.query<RowDataPacket[]>(
-            "SELECT id, username, email, role, wallet_balance, created_at FROM user_account"
-        );
+        const [rows] = await db.query("SELECT id, username, email, role, wallet_balance, created_at FROM user_account");
         res.json(rows);
     } catch (err) {
         console.error(err);
@@ -106,36 +155,50 @@ router.get("/users", async (_req, res) => {
     }
 });
 
-// 🔹 UPDATE PROFILE
-router.post('/update-profile', upload.single('profileImg'), async (req: Request, res: Response) => {
-    try {
-        const { userId, name } = req.body;
-        let profile_image_url = '';
+router.post("/update-profile", upload.single("profileImg"), async (req: Request, res: Response) => {
+  try {
+    const { userId, name } = req.body;
 
-        if (req.file) {
-            profile_image_url = `/uploads/${req.file.filename}`;
-        }
+    // 🔸 Validation เบื้องต้น
+    if (!userId) return res.status(400).json({ success: false, error: "Missing userId" });
 
-        // Update DB
-        let query = '';
-        const params: any[] = [];
-        if (profile_image_url) {
-            query = 'UPDATE user_account SET username = ?, profile_image_url = ? WHERE id = ?';
-            params.push(name, profile_image_url, userId);
-        } else {
-            query = 'UPDATE user_account SET username = ? WHERE id = ?';
-            params.push(name, userId);
-        }
+    let profile_image_url: string | null = null;
 
-        await db.query(query, params);
-
-        // Fetch updated user
-        const [rows] = await db.query<RowDataPacket[]>('SELECT id, username, profile_image_url, wallet_balance FROM user_account WHERE id = ?', [userId]);
-        const user = rows[0];
-
-        res.json({ success: true, user });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ success: false, message: 'Server error' });
+    // 🔸 ถ้ามีการอัปโหลดไฟล์ใหม่
+    if (req.file) {
+      profile_image_url = `/uploads/${req.file.filename}`;
     }
+
+    // 🔸 อัปเดตข้อมูล
+    const updateQuery = profile_image_url
+      ? "UPDATE user_account SET username=?, profile_image_url=? WHERE id=?"
+      : "UPDATE user_account SET username=? WHERE id=?";
+    const params = profile_image_url ? [name, profile_image_url, userId] : [name, userId];
+
+    await db.query(updateQuery, params);
+
+    // 🔸 ดึงข้อมูลผู้ใช้ที่อัปเดตแล้ว
+    const [rows]: any = await db.query("SELECT * FROM user_account WHERE id=?", [userId]);
+    if (!rows.length) {
+      return res.status(404).json({ success: false, error: "ไม่พบผู้ใช้" });
+    }
+
+    const user = rows[0];
+
+    // 🔸 ส่งกลับข้อมูลผู้ใช้ล่าสุด
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        wallet_balance: user.wallet_balance,
+        profile_image_url: user.profile_image_url,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: "เกิดข้อผิดพลาดในระบบ" });
+  }
 });
