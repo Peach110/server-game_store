@@ -1,4 +1,4 @@
 import multer from "multer";
 export declare const router: import("express-serve-static-core").Router;
 export declare const upload: multer.Multer;
-//# sourceMappingURL=user.d.ts.map
+//# sourceMappingURL=games.d.ts.map

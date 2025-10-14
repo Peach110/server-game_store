@@ -4,10 +4,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.db = void 0;
-// db.ts
 const promise_1 = __importDefault(require("mysql2/promise"));
 const dotenv_1 = __importDefault(require("dotenv"));
-dotenv_1.default.config(); // โหลดค่าจากไฟล์ .env
+dotenv_1.default.config();
 exports.db = promise_1.default.createPool({
     host: process.env.DB_HOST || "202.28.34.203",
     user: process.env.DB_USER || "mb68_66011212222",
@@ -17,6 +16,7 @@ exports.db = promise_1.default.createPool({
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
+    connectTimeout: 20000,
 });
 (async () => {
     try {
@@ -28,5 +28,4 @@ exports.db = promise_1.default.createPool({
         console.error("❌ Database connection failed:", err);
     }
 })();
-exports.default = exports.db;
 //# sourceMappingURL=dbconn.js.map

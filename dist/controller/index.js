@@ -7,6 +7,6 @@ exports.router = void 0;
 const express_1 = __importDefault(require("express"));
 exports.router = express_1.default.Router();
 exports.router.get('/', (req, res) => {
-    res.send('Get in index.ts');
+    res.send('Hello GameStore Project');
 });
 //# sourceMappingURL=index.js.map
