@@ -1,62 +1,25 @@
 import express from "express"; 
-import { initializeApp } from "firebase/app";
-import {
-  getStorage,
-  ref,
-  getDownloadURL,
-  uploadBytesResumable,
-} from "firebase/storage";
+import path from "path";
 import multer from "multer";
+import fs from "fs";
 
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
-const firebaseConfig = {
-  apiKey: "AIzaSyC7qVqJRKMVK3rPWEGX3RknQ6vS7wn87dI",
-  authDomain: "game-store-26fdf.firebaseapp.com",
-  projectId: "game-store-26fdf",
-  storageBucket: "game-store-26fdf.firebasestorage.app",
-  messagingSenderId: "98541783499",
-  appId: "1:98541783499:web:87ab4918d25e2041068e4e",
-  measurementId: "G-ZZVSW047MJ"
-};
+export const router = express.Router();
 
-const router = express.Router();
+const uploadPath = path.join(__dirname, "../uploads");
+if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
 
-// Initialize Firebase
-initializeApp(firebaseConfig);
-const storage = getStorage();
-
-class FileMiddleware {
-  filename = "";
-  public readonly diskLoader = multer({
-    storage: multer.memoryStorage(),
-    limits: {
-      fileSize: 67108864, // 64 MByte
-    },
-  });
-}
-
-const fileUpload = new FileMiddleware();
-router.post("/", fileUpload.diskLoader.single("file"), async (req, res) => {
-  try {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 10000);
-    const storageRef = ref(
-      storage,
-      `images/${uniqueSuffix}.${req.file!.originalname.split(".").pop()}`
-    );
-    const metadata = {
-      contentType: req.file!.mimetype,
-    };
-    const snapshot = await uploadBytesResumable(
-      storageRef,
-      req.file!.buffer,
-      metadata
-    );
-    const downloadUrl = await getDownloadURL(snapshot.ref);
-    res.json({ filename: downloadUrl });
-  } catch (err) {
-    console.log(err);
-    res.send(err);
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadPath),
+  filename: (_req, file, cb) => {
+    const uniqueName = Date.now() + "-" + Math.round(Math.random() * 10000) + path.extname(file.originalname);
+    cb(null, uniqueName);
   }
 });
 
-export { router }; 
+const upload = multer({ storage, limits: { fileSize: 64 * 1024 * 1024 } });
+
+router.post("/", upload.single("file"), (req, res) => {
+  const file = req.file;
+  if (!file) return res.status(400).json({ message: "ไม่มีไฟล์ส่งมา" });
+  res.json({ filename: file.filename }); // ส่งเฉพาะชื่อไฟล์
+});
