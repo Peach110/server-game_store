@@ -391,3 +391,5 @@ router.delete("/deletecode/:id", async (req: Request, res: Response) => {
     res.status(500).json({ message: "ลบโค้ดล้มเหลว" });
   }
 });
+
+export { router }; 

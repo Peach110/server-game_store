@@ -4,79 +4,100 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.router = void 0;
-const express_1 = require("express");
-const dbconn_1 = require("../db/dbconn");
+const express_1 = __importDefault(require("express"));
 const multer_1 = __importDefault(require("multer"));
+const firebase_admin_1 = __importDefault(require("firebase-admin"));
 const path_1 = __importDefault(require("path"));
+const dbconn_1 = require("../db/dbconn"); // ตามโครงโปรเจกต์คุณ
 const fs_1 = __importDefault(require("fs"));
-const express_2 = __importDefault(require("express"));
-exports.router = (0, express_1.Router)();
-exports.router.use(express_2.default.json());
-exports.router.use(express_2.default.urlencoded({ extended: true }));
-// ============================
-// 📂 ตั้งค่าการอัปโหลดรูปภาพ
-// ============================
-const uploadPath = path_1.default.join(__dirname, "../uploads");
-if (!fs_1.default.existsSync(uploadPath)) {
-    fs_1.default.mkdirSync(uploadPath, { recursive: true });
-}
-const storage = multer_1.default.diskStorage({
-    destination: (_req, _file, cb) => {
-        cb(null, uploadPath);
-    },
-    filename: (_req, file, cb) => {
-        const uniqueName = Date.now() + path_1.default.extname(file.originalname);
-        cb(null, uniqueName);
-    },
+const router = express_1.default.Router();
+exports.router = router;
+// -----------------------------
+// ✅ Init Firebase Admin
+// -----------------------------
+const serviceAccount = JSON.parse(fs_1.default.readFileSync(path_1.default.join(__dirname, "../serviceAccountKey.json"), "utf8"));
+firebase_admin_1.default.initializeApp({
+    credential: firebase_admin_1.default.credential.cert(serviceAccount),
+    storageBucket: "game-store-26fdf.appspot.com" // <-- แก้ให้ตรงกับของคุณ
 });
-const upload = (0, multer_1.default)({ storage });
-// ===================================================
-// 🟢 1. เพิ่มเกมใหม่ + อัปโหลดรูป
-// ===================================================
-// Route เพิ่มเกม
-exports.router.post("/addgame", upload.fields([
+const bucket = firebase_admin_1.default.storage().bucket();
+// -----------------------------
+// ✅ Multer memory storage
+// -----------------------------
+const upload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: { fileSize: 64 * 1024 * 1024 } // 64 MB
+});
+// -----------------------------
+// Helper: upload buffer to Firebase Storage and make public
+// returns public URL
+// -----------------------------
+async function uploadBufferToFirebase(buffer, destinationPath, contentType) {
+    const file = bucket.file(destinationPath);
+    await file.save(buffer, {
+        metadata: {
+            contentType,
+            // optional: cacheControl: "public, max-age=31536000"
+        },
+        resumable: false,
+    });
+    // Make public (so URL is accessible directly). Alternative: generate signed URL.
+    await file.makePublic();
+    // public URL:
+    return `https://storage.googleapis.com/${bucket.name}/${encodeURI(destinationPath)}`;
+}
+// -----------------------------
+// 1) เพิ่มเกมใหม่ (อัปโหลดรูปขึ้น Firebase เองแล้วเก็บ URL ลง DB)
+// -----------------------------
+router.post("/addgame", upload.fields([
     { name: "cover_image", maxCount: 1 },
     { name: "images", maxCount: 5 }
 ]), async (req, res) => {
     const { title, price, category_id, description } = req.body;
-    if (!title || !category_id || !req.files) {
-        return res.status(400).json({ message: "กรุณากรอกข้อมูลให้ครบถ้วน" });
+    if (!title || !category_id) {
+        return res.status(400).json({ message: "กรุณากรอกข้อมูลให้ครบ" });
     }
     try {
+        // files
         const files = req.files;
-        // ดึง cover image
-        const coverFile = files.cover_image?.[0];
-        if (!coverFile) {
+        // cover
+        if (!files?.cover_image || files.cover_image.length === 0) {
             return res.status(400).json({ message: "กรุณาอัปโหลดรูปหน้าปก" });
         }
-        const cover_image_url = coverFile.filename.trim();
-        // เพิ่มเกม
-        const [result] = await dbconn_1.db.query("INSERT INTO game (title, price, category_id, description, cover_image_url) VALUES (?, ?, ?, ?, ?)", [title.trim(), price, category_id, description?.trim(), cover_image_url]);
+        // upload cover to Firebase
+        const coverFile = files.cover_image[0];
+        const coverExt = path_1.default.extname(coverFile.originalname) || "";
+        const coverDestination = `games/covers/${Date.now()}-${Math.round(Math.random() * 10000)}${coverExt}`;
+        const coverUrl = await uploadBufferToFirebase(coverFile.buffer, coverDestination, coverFile.mimetype);
+        // insert game row, store coverUrl
+        const [result] = await dbconn_1.db.query("INSERT INTO game (title, price, category_id, description, cover_image_url) VALUES (?, ?, ?, ?, ?)", [title.trim(), price || 0, category_id, description?.trim() || null, coverUrl]);
         const gameId = result.insertId;
-        // ดึงรูปอื่นๆ
-        const imagesFiles = files.images || [];
-        const images = imagesFiles.map(f => f.filename.trim());
-        for (const img of images) {
-            await dbconn_1.db.query("INSERT INTO game_image (game_id, image_url) VALUES (?, ?)", [gameId, img]);
+        // other images (optional)
+        const imageFiles = files?.images || [];
+        const imageUrls = [];
+        for (const f of imageFiles) {
+            const ext = path_1.default.extname(f.originalname) || "";
+            const dest = `games/images/${Date.now()}-${Math.round(Math.random() * 10000)}${ext}`;
+            const url = await uploadBufferToFirebase(f.buffer, dest, f.mimetype);
+            imageUrls.push(url);
+            await dbconn_1.db.query("INSERT INTO game_image (game_id, image_url) VALUES (?, ?)", [gameId, url]);
         }
-        // ส่ง path เต็มให้ frontend
-        const fullPaths = images.map(img => `/uploads/${img}`);
         res.json({
             message: "เพิ่มเกมสำเร็จ",
             gameId,
-            cover_image_url: `/uploads/${cover_image_url}`,
-            images: fullPaths
+            cover_image_url: coverUrl,
+            images: imageUrls
         });
     }
     catch (err) {
         console.error("❌ เพิ่มเกมล้มเหลว:", err);
-        res.status(500).json({ message: "เพิ่มเกมล้มเหลว" });
+        res.status(500).json({ message: "เพิ่มเกมล้มเหลว", error: String(err) });
     }
 });
-// ===================================================
-// 🟡 2. ดึงเกมทั้งหมด (หน้า Admin)
-// ===================================================
-exports.router.get("/allgames", async (_req, res) => {
+// -----------------------------
+// 2) ดึงเกมทั้งหมด (Admin) — ส่ง URL จาก DB ตรงๆ
+// -----------------------------
+router.get("/allgames", async (_req, res) => {
     try {
         const [games] = await dbconn_1.db.query(`
       SELECT 
@@ -97,20 +118,16 @@ exports.router.get("/allgames", async (_req, res) => {
         const result = games.map((g) => {
             const gameImages = images
                 .filter((img) => img.game_id === g.id)
-                .map((img) => `/uploads/${img.image_url.trim()}`);
-            const coverPath = g.cover_image_url
-                ? `/uploads/${path_1.default.basename(g.cover_image_url.trim())}`
-                : gameImages.length > 0
-                    ? gameImages[0]
-                    : null;
+                .map((img) => img.image_url.trim()); // already full URL
+            const coverPath = g.cover_image_url ? g.cover_image_url.trim() : (gameImages.length > 0 ? gameImages[0] : null);
             return {
                 id: g.id,
                 name: g.title.trim(),
                 price: g.price,
-                category: g.category_name, // ✅ แสดงชื่อประเภทตรงนี้
+                category: g.category_name,
                 description: g.description?.trim(),
                 releaseDate: g.release_date,
-                sold_count: g.sold_count, // ✅ เพิ่มยอดขายในผลลัพธ์
+                sold_count: g.sold_count,
                 cover_image_url: coverPath,
                 images: gameImages,
             };
@@ -122,47 +139,112 @@ exports.router.get("/allgames", async (_req, res) => {
         res.status(500).json({ message: "โหลดข้อมูลเกมล้มเหลว" });
     }
 });
-// ===================================================
-// 🟣 3. แก้ไขข้อมูลเกม
-// ===================================================
-exports.router.put("/editgame/:id", upload.array("images", 5), async (req, res) => {
+// -----------------------------
+// 3) แก้ไขเกม — ถ้ามีไฟล์ใหม่ให้ upload ขึ้น Firebase และลบไฟล์เก่า
+// -----------------------------
+router.put("/editgame/:id", upload.fields([{ name: "cover_image", maxCount: 1 }, { name: "images", maxCount: 5 }]), async (req, res) => {
     const { id } = req.params;
-    const { name, price, category, description, cover_image_url } = req.body;
+    const { name, price, category, description } = req.body;
     const files = req.files;
     try {
-        // ✅ อัปเดตข้อมูลเกม (ไม่แตะรูปภาพ)
-        await dbconn_1.db.query("UPDATE game SET title=?, price=?, category_id=?, description=? WHERE id=?", [name?.trim(), price, category, description?.trim(), id]);
-        // ✅ ถ้ามีการอัปโหลดรูปใหม่ → ลบรูปเก่าออกและเพิ่มรูปใหม่
-        if (files && files.length > 0) {
-            // ดึงชื่อไฟล์เก่าก่อนจะลบ
-            const [oldImages] = await dbconn_1.db.query("SELECT image_url FROM game_image WHERE game_id=?", [id]);
-            // ลบรูปเก่าออกจากโฟลเดอร์ /uploads
-            oldImages.forEach((img) => {
-                const imgPath = path_1.default.join(__dirname, "../uploads", img.image_url);
-                if (fs_1.default.existsSync(imgPath))
-                    fs_1.default.unlinkSync(imgPath);
-            });
-            // ลบ record เก่าจาก DB
+        // อัปเดตข้อมูลทั่วไป
+        await dbconn_1.db.query("UPDATE game SET title=?, price=?, category_id=?, description=? WHERE id=?", [
+            name?.trim(), price || 0, category, description?.trim() || null, id
+        ]);
+        // หากมี cover ใหม่ -> ลบ cover เก่า (จาก Firebase) แล้วอัปโหลดใหม่
+        if (files?.cover_image && files.cover_image.length > 0) {
+            // ดึงชื่อ cover เก่า
+            const [rows] = await dbconn_1.db.query("SELECT cover_image_url FROM game WHERE id=?", [id]);
+            const oldCoverUrl = rows[0]?.cover_image_url;
+            if (oldCoverUrl) {
+                // extract path after bucket host: https://storage.googleapis.com/<bucket>/<path>
+                const parts = oldCoverUrl.split(`/${bucket.name}/`);
+                if (parts.length === 2) {
+                    const oldPath = decodeURIComponent(parts[1]);
+                    try {
+                        await bucket.file(oldPath).delete();
+                    }
+                    catch (e) {
+                        console.warn("ลบ cover เก่าไม่สำเร็จ:", e);
+                    }
+                }
+            }
+            // upload new cover
+            const c = files.cover_image[0];
+            const ext = path_1.default.extname(c.originalname) || "";
+            const coverDest = `games/covers/${Date.now()}-${Math.round(Math.random() * 10000)}${ext}`;
+            const coverUrl = await uploadBufferToFirebase(c.buffer, coverDest, c.mimetype);
+            await dbconn_1.db.query("UPDATE game SET cover_image_url=? WHERE id=?", [coverUrl, id]);
+        }
+        // หากมี images ใหม่ -> ลบ images เก่า ทั้งหมด แล้วเพิ่มใหม่
+        if (files?.images && files.images.length > 0) {
+            const [oldImgs] = await dbconn_1.db.query("SELECT image_url FROM game_image WHERE game_id=?", [id]);
+            for (const r of oldImgs) {
+                const url = r.image_url;
+                const parts = url.split(`/${bucket.name}/`);
+                if (parts.length === 2) {
+                    const oldPath = decodeURIComponent(parts[1]);
+                    try {
+                        await bucket.file(oldPath).delete();
+                    }
+                    catch (e) {
+                        console.warn("ลบ image เก่าไม่สำเร็จ:", e);
+                    }
+                }
+            }
             await dbconn_1.db.query("DELETE FROM game_image WHERE game_id=?", [id]);
-            // เพิ่มรูปใหม่ใน DB
-            const newImages = files.map(f => f.filename.trim());
-            for (const img of newImages) {
-                await dbconn_1.db.query("INSERT INTO game_image (game_id, image_url) VALUES (?, ?)", [id, img]);
+            // upload new images and insert
+            for (const f of files.images) {
+                const ext = path_1.default.extname(f.originalname) || "";
+                const dest = `games/images/${Date.now()}-${Math.round(Math.random() * 10000)}${ext}`;
+                const imgUrl = await uploadBufferToFirebase(f.buffer, dest, f.mimetype);
+                await dbconn_1.db.query("INSERT INTO game_image (game_id, image_url) VALUES (?, ?)", [id, imgUrl]);
             }
         }
-        res.json({ message: "✅ แก้ไขข้อมูลเกมสำเร็จ และบันทึกถาวรแล้ว" });
+        res.json({ message: "แก้ไขเกมสำเร็จ" });
     }
     catch (err) {
-        console.error("❌ แก้ไขข้อมูลเกมล้มเหลว:", err);
-        res.status(500).json({ message: "❌ แก้ไขข้อมูลเกมล้มเหลว" });
+        console.error("❌ แก้ไขเกมล้มเหลว:", err);
+        res.status(500).json({ message: "แก้ไขเกมล้มเหลว", error: String(err) });
     }
 });
-// 🔴 4. ลบเกม
-// ===================================================
-exports.router.delete("/deletegame/:id", async (req, res) => {
+// -----------------------------
+// 4) ลบเกม — ลบ record และไฟล์ใน Firebase
+// -----------------------------
+router.delete("/deletegame/:id", async (req, res) => {
     const { id } = req.params;
     try {
-        // ลบข้อมูลที่อ้างถึงเกมใน user_library ก่อน
+        // ลบ images ใน Firebase
+        const [imgs] = await dbconn_1.db.query("SELECT image_url FROM game_image WHERE game_id=?", [id]);
+        for (const r of imgs) {
+            const url = r.image_url;
+            const parts = url.split(`/${bucket.name}/`);
+            if (parts.length === 2) {
+                const oldPath = decodeURIComponent(parts[1]);
+                try {
+                    await bucket.file(oldPath).delete();
+                }
+                catch (e) {
+                    console.warn("ลบไฟล์ภาพไม่สำเร็จ:", e);
+                }
+            }
+        }
+        // ลบ cover ใน Firebase
+        const [gameRows] = await dbconn_1.db.query("SELECT cover_image_url FROM game WHERE id=?", [id]);
+        const coverUrl = gameRows[0]?.cover_image_url;
+        if (coverUrl) {
+            const parts = coverUrl.split(`/${bucket.name}/`);
+            if (parts.length === 2) {
+                const oldPath = decodeURIComponent(parts[1]);
+                try {
+                    await bucket.file(oldPath).delete();
+                }
+                catch (e) {
+                    console.warn("ลบ cover ไม่สำเร็จ:", e);
+                }
+            }
+        }
+        // ลบจาก DB
         await dbconn_1.db.query("DELETE FROM user_library WHERE game_id=?", [id]);
         await dbconn_1.db.query("DELETE FROM game_image WHERE game_id=?", [id]);
         await dbconn_1.db.query("DELETE FROM game WHERE id=?", [id]);
@@ -170,11 +252,11 @@ exports.router.delete("/deletegame/:id", async (req, res) => {
     }
     catch (err) {
         console.error("❌ ลบเกมล้มเหลว:", err);
-        res.status(500).json({ message: "ลบเกมล้มเหลว" });
+        res.status(500).json({ message: "ลบเกมล้มเหลว", error: String(err) });
     }
 });
 // 🔹 ดึงรายชื่อผู้ใช้ทั้งหมด
-exports.router.get("/users", async (_req, res) => {
+router.get("/users", async (_req, res) => {
     try {
         const [users] = await dbconn_1.db.query(`SELECT id, username AS name, email FROM user_account ORDER BY id`);
         res.json({ success: true, users });
@@ -185,7 +267,7 @@ exports.router.get("/users", async (_req, res) => {
     }
 });
 // ✅ ดึงประวัติธุรกรรม (เติมเงิน + ซื้อเกม)
-exports.router.get("/user/:id/transactions", async (req, res) => {
+router.get("/user/:id/transactions", async (req, res) => {
     const userId = parseInt(req.params.id);
     if (!userId)
         return res.status(400).json({ success: false, message: "user_id ไม่ถูกต้อง" });
@@ -220,7 +302,7 @@ exports.router.get("/user/:id/transactions", async (req, res) => {
     }
 });
 /** ดึงโค้ดทั้งหมด */
-exports.router.get("/allcodes", async (req, res) => {
+router.get("/allcodes", async (req, res) => {
     try {
         const [rows] = await dbconn_1.db.query("SELECT * FROM Discount_code ORDER BY id DESC");
         res.json(rows);
@@ -231,7 +313,7 @@ exports.router.get("/allcodes", async (req, res) => {
     }
 });
 /** เพิ่มโค้ดใหม่ */
-exports.router.post("/addcodes", async (req, res) => {
+router.post("/addcodes", async (req, res) => {
     const { code_id, price, max_use, discount_persen } = req.body;
     if (!code_id || !max_use)
         return res.status(400).json({ message: "กรุณากรอก code_id และ max_use ให้ครบ" });
@@ -245,7 +327,7 @@ exports.router.post("/addcodes", async (req, res) => {
     }
 });
 /** แก้ไขโค้ด */
-exports.router.put("/editcode/:id", async (req, res) => {
+router.put("/editcode/:id", async (req, res) => {
     const { id } = req.params;
     const { code_id, price, max_use, discount_persen } = req.body;
     if (!code_id || !max_use)
@@ -260,7 +342,7 @@ exports.router.put("/editcode/:id", async (req, res) => {
     }
 });
 /** ลบโค้ด */
-exports.router.delete("/deletecode/:id", async (req, res) => {
+router.delete("/deletecode/:id", async (req, res) => {
     const { id } = req.params;
     try {
         await dbconn_1.db.query("DELETE FROM Discount_code WHERE id=?", [id]);
