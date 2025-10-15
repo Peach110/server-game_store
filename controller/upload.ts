@@ -1,9 +1,14 @@
 import express from "express"; 
-import multer from "multer";
 import { initializeApp } from "firebase/app";
-import { getStorage, ref, getDownloadURL, uploadBytesResumable } from "firebase/storage";
+import {
+  getStorage,
+  ref,
+  getDownloadURL,
+  uploadBytesResumable,
+} from "firebase/storage";
+import multer from "multer";
 
-// ✅ Firebase Config (เช็ก bucket name ให้ตรง)
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyC7qVqJRKMVK3rPWEGX3RknQ6vS7wn87dI",
   authDomain: "game-store-26fdf.firebaseapp.com",
@@ -14,39 +19,45 @@ const firebaseConfig = {
   measurementId: "G-ZZVSW047MJ"
 };
 
-// ✅ Initialize Firebase
+const router = express.Router();
+
+// Initialize Firebase
 initializeApp(firebaseConfig);
 const storage = getStorage();
 
-const router = express.Router();
+class FileMiddleware {
+  filename = "";
+  public readonly diskLoader = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: 67108864, // 64 MByte
+    },
+  });
+}
 
-// ✅ ใช้ memoryStorage สำหรับอัปโหลดขึ้น Firebase เท่านั้น
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 64 * 1024 * 1024 } // 64MB
-});
-
-// ✅ API Upload ไฟล์ไป Firebase
-router.post("/upload", upload.single("file"), async (req, res) => {
+const fileUpload = new FileMiddleware();
+router.post("/", fileUpload.diskLoader.single("file"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: "ไม่มีไฟล์ส่งมา" });
-
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 10000);
-    const ext = req.file.originalname.split(".").pop();
-    const storageRef = ref(storage, `games/${uniqueSuffix}.${ext}`);
-
-    const metadata = { contentType: req.file.mimetype };
-    const snapshot = await uploadBytesResumable(storageRef, req.file.buffer, metadata);
-
+    const storageRef = ref(
+      storage,
+      `images/${uniqueSuffix}.${req.file!.originalname.split(".").pop()}`
+    );
+    const metadata = {
+      contentType: req.file!.mimetype,
+    };
+    const snapshot = await uploadBytesResumable(
+      storageRef,
+      req.file!.buffer,
+      metadata
+    );
     const downloadUrl = await getDownloadURL(snapshot.ref);
-    res.json({ url: downloadUrl }); // ✅ ส่ง URL กลับไปเก็บใน DB ได้เลย
+    res.json({ filename: downloadUrl });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "อัปโหลดล้มเหลว" });
+    console.log(err);
+    res.send(err);
   }
 });
-// Initialize Firebase
-
 
 
 export default router;
